@@ -30,3 +30,16 @@ def ParsePastedKVPair(headers_str):
     content = line[first_colon_idx+1:].strip()
     result[name] = content
   return result
+
+def ParseCookieStrAsDict(cookie_str):
+  lines = cookie_str.split(";")
+  kv_dict = {}
+  for line in lines:
+    line = line.strip()
+    if len(line) == 0:
+      continue
+    line_sp = line.split("=")
+    if len(line_sp) != 2:
+      raise ValueError("cannot handle this line: ", line)
+    kv_dict[line_sp[0]] = line_sp[1]
+  return kv_dict
