@@ -2,16 +2,19 @@
 import threading
 import queue
 import os
+import re
 import requests
 import tqdm
 import shutil
-from .file import GuessFileExtension
+from .file import GuessFileExtension, RefineLocalName
 
 class SingleDownloadPack:
   def __init__(self) -> None:
     self.url = None
     self.local_path = None
     self.display_name = None
+    self.auto_add_name_to_path = False
+    self.download_complete_callback = None
 
 def GetLocalSameNameFilesAtPath(seed_path):
   result = []
@@ -22,9 +25,21 @@ def GetLocalSameNameFilesAtPath(seed_path):
       result.append(os.path.join(folder, folder_file))
   return result
 
-def DownloadSinglePack(sess, pack, thread_idx=0, verbose_level=10, auto_file_ext=False):
+def GetProposedFileNameFromResponse(response):
+  try:
+    d = response.headers['content-disposition']
+    fname = re.findall("filename=(.+)", d)[0]
+    return RefineLocalName(fname.strip('"').strip("'"))
+  except:
+    last_name = os.path.split(response.url)[1]
+    return RefineLocalName(last_name)
+
+def DownloadSinglePack(sess, pack: SingleDownloadPack, thread_idx=0, 
+                       verbose_level=10, auto_file_ext=False, allow_redirects=True):
   chunk_size = 16384
-  response_stream = sess.get(pack.url, stream=True)
+  response_stream = sess.get(pack.url, stream=True, allow_redirects=allow_redirects)
+  if pack.auto_add_name_to_path:
+    pack.local_path = os.path.join(pack.local_path, GetProposedFileNameFromResponse(response_stream))
   total_size = int(response_stream.headers['Content-length'])
   # file_name = os.path.splitext(os.path.split(pack.local_path)[1])[0]
   desc_notify = pack.display_name
@@ -42,9 +57,12 @@ def DownloadSinglePack(sess, pack, thread_idx=0, verbose_level=10, auto_file_ext
       print("{} download complete, will not do download".format(local_result_path))
       break
 
+  if desc_notify is None:
+    desc_notify = pack.local_path
+
   if download_needed:
     if len(desc_notify) > 30:
-      desc_notify = desc_notify[:30] 
+      desc_notify = desc_notify[-30:] 
     with open(pack.local_path, "wb") as f:
       if verbose_level == 0:
         for b in response_stream.iter_content(chunk_size=chunk_size):
@@ -65,6 +83,9 @@ def DownloadSinglePack(sess, pack, thread_idx=0, verbose_level=10, auto_file_ext
       if guess_ext != "":
         print("auto ext: {} -> {}".format(local_result_path, os.path.join(folder, name+guess_ext)))
         shutil.move(local_result_path, os.path.join(folder, name+guess_ext))
+
+  if pack.download_complete_callback is not None:
+    pack.download_complete_callback(pack=pack)
 
 def ThreadLoopFn(pack_queue: queue.Queue, sess=None, thread_idx=0, get_pack_fn=None):
   if sess is None:
